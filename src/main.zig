@@ -1,6 +1,8 @@
 const std = @import("std");
 const gpgmez = @import("gpgmez");
+
 const gpg_mod = @import("gpg.zig");
+const env_mod = @import("env.zig");
 
 pub const Cred = union(enum) {
     token: []const u8,
@@ -44,11 +46,19 @@ pub const Cred = union(enum) {
 
 const Driver = union(enum) {
     gpg: gpg_mod.Driver,
+    env: env_mod.Driver,
 
     fn fetch(self: *Driver, alloc: std.mem.Allocator) ?Cred {
         switch (self.*) {
             .gpg => |g| {
                 const res = g.fetch(alloc) orelse return null;
+                defer alloc.free(res);
+
+                return Cred.init(res, alloc) catch return null;
+            },
+
+            .env => |e| {
+                const res = e.fetch(alloc) orelse return null;
                 defer alloc.free(res);
 
                 return Cred.init(res, alloc) catch return null;
@@ -61,6 +71,7 @@ const Driver = union(enum) {
     fn deinit(self: *Driver, alloc: std.mem.Allocator) void {
         switch (self.*) {
             .gpg => |g| g.deinit(alloc),
+            .env => |e| e.deinit(alloc),
         }
     }
 };
@@ -85,22 +96,14 @@ pub const Credentials = struct {
         self.drivers.deinit();
     }
 
+    pub fn env(self: *Credentials, key: []const u8) !void {
+        const driver = try env_mod.Driver.init(key, self.alloc);
+        try self.drivers.append(Driver{ .env = driver });
+    }
+
     pub fn gpg(self: *Credentials, path: []const u8) !void {
-        gpgmez.init();
-
-        var ctx = try self.alloc.create(gpgmez.Context);
-        ctx.* = try gpgmez.Context.init();
-
-        var buf = try self.alloc.alloc(u8, path.len + 1);
-        @memcpy(buf[0..path.len], path);
-        buf[path.len] = 0;
-
-        try self.drivers.append(Driver{
-            .gpg = gpg_mod.Driver{
-                .ctx = ctx,
-                .path = @ptrCast(buf),
-            },
-        });
+        const driver = try gpg_mod.Driver.init(path, self.alloc);
+        try self.drivers.append(Driver{ .gpg = driver });
     }
 
     pub fn fetch(self: *Credentials) ?Cred {
@@ -127,4 +130,21 @@ test "testing gpg key" {
     defer fetcher.free(cred);
 
     try std.testing.expectEqualSlices(u8, "hello world\n", cred.token);
+}
+
+test "test env" {
+    const Err = error{failed};
+
+    var fetcher = Credentials.init(std.testing.allocator);
+    defer fetcher.deinit();
+
+    try fetcher.env("USER");
+
+    var cred = fetcher.fetch() orelse return Err.failed;
+    defer fetcher.free(cred);
+
+    const user = try std.process.getEnvVarOwned(std.testing.allocator, "USER");
+    defer std.testing.allocator.free(user);
+
+    try std.testing.expectEqualSlices(u8, user, cred.token);
 }

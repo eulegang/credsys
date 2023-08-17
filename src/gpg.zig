@@ -1,9 +1,27 @@
 const std = @import("std");
 const gpgmez = @import("gpgmez");
 
+const Alloc = std.mem.Allocator;
+
 pub const Driver = struct {
     ctx: *gpgmez.Context,
     path: [*:0]const u8,
+
+    pub fn init(path: []const u8, alloc: Alloc) !Driver {
+        gpgmez.init();
+
+        var ctx = try alloc.create(gpgmez.Context);
+        ctx.* = try gpgmez.Context.init();
+
+        var buf = try alloc.alloc(u8, path.len + 1);
+        @memcpy(buf[0..path.len], path);
+        buf[path.len] = 0;
+
+        return Driver{
+            .ctx = ctx,
+            .path = @ptrCast(buf),
+        };
+    }
 
     pub fn fetch(self: Driver, alloc: std.mem.Allocator) ?[]const u8 {
         var secret = gpgmez.Data.file(self.path) catch return null;
