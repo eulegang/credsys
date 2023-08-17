@@ -1,0 +1,3 @@
+[submodule "deps/gpgmez"]
+	path = deps/gpgmez
+	url = ssh://github.com/eulegang/gpgmez
