@@ -3,6 +3,7 @@ const gpgmez = @import("gpgmez");
 
 const gpg_mod = @import("gpg.zig");
 const env_mod = @import("env.zig");
+const static_mod = @import("static.zig");
 
 pub const Cred = union(enum) {
     token: []const u8,
@@ -47,6 +48,7 @@ pub const Cred = union(enum) {
 const Driver = union(enum) {
     gpg: gpg_mod.Driver,
     env: env_mod.Driver,
+    static: static_mod.Driver,
 
     fn fetch(self: *Driver, alloc: std.mem.Allocator) ?Cred {
         switch (self.*) {
@@ -63,6 +65,12 @@ const Driver = union(enum) {
 
                 return Cred.init(res, alloc) catch return null;
             },
+            .static => |s| {
+                const res = s.fetch(alloc) orelse return null;
+                defer alloc.free(res);
+
+                return Cred.init(res, alloc) catch return null;
+            },
         }
 
         return null;
@@ -72,6 +80,7 @@ const Driver = union(enum) {
         switch (self.*) {
             .gpg => |g| g.deinit(alloc),
             .env => |e| e.deinit(alloc),
+            .static => |s| s.deinit(alloc),
         }
     }
 };
@@ -106,6 +115,11 @@ pub const Credentials = struct {
         try self.drivers.append(Driver{ .gpg = driver });
     }
 
+    pub fn static(self: *Credentials, value: []const u8) !void {
+        const driver = try static_mod.Driver.init(value, self.alloc);
+        try self.drivers.append(Driver{ .static = driver });
+    }
+
     pub fn fetch(self: *Credentials) ?Cred {
         for (self.drivers.items) |*driver|
             if (driver.fetch(self.alloc)) |cred|
@@ -119,7 +133,7 @@ pub const Credentials = struct {
     }
 };
 
-test "testing gpg key" {
+test "gpg" {
     const Err = error{failed};
     var fetcher = Credentials.init(std.testing.allocator);
     defer fetcher.deinit();
@@ -132,7 +146,7 @@ test "testing gpg key" {
     try std.testing.expectEqualSlices(u8, "hello world\n", cred.token);
 }
 
-test "test env" {
+test "env" {
     const Err = error{failed};
 
     var fetcher = Credentials.init(std.testing.allocator);
@@ -147,4 +161,18 @@ test "test env" {
     defer std.testing.allocator.free(user);
 
     try std.testing.expectEqualSlices(u8, user, cred.token);
+}
+
+test "static" {
+    const Err = error{failed};
+
+    var fetcher = Credentials.init(std.testing.allocator);
+    defer fetcher.deinit();
+
+    try fetcher.static("STATIK SHOCK!");
+
+    var cred = fetcher.fetch() orelse return Err.failed;
+    defer fetcher.free(cred);
+
+    try std.testing.expectEqualSlices(u8, "STATIK SHOCK!", cred.token);
 }
